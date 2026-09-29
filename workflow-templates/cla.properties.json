@@ -1,0 +1,6 @@
+{
+  "name": "CLA Assistant",
+  "description": "Ask contributors to sign the kasuken Contributor License Agreement on their pull requests.",
+  "iconName": "octicon law",
+  "categories": ["Automation"]
+}
