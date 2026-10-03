@@ -22,4 +22,9 @@ GitHub uses these files automatically for any repository that doesn't have its o
 
 ## CLA workflow template
 
-[`workflow-templates/cla.yml`](workflow-templates/cla.yml) runs the CLA Assistant bot. Workflows are not inherited, so copy it into each repository as `.github/workflows/cla.yml`. Signatures are stored in each repository's `cla-signatures` branch.
+[`workflow-templates/cla.yml`](workflow-templates/cla.yml) runs the CLA Assistant bot. Workflows are not inherited, so copy it into each repository as `.github/workflows/cla.yml`. Signatures are stored in each repository's `cla-signatures` branch. The action does not create that branch: create it before the first pull request, or every CLA check fails with "Branch cla-signatures not found":
+
+```bash
+git switch --orphan cla-signatures && echo '{"signedContributors": []}' > cla.json && mkdir signatures && mv cla.json signatures/ \
+  && git add signatures && git commit -m "chore: initialize CLA signatures branch" && git push -u origin cla-signatures
+```
