@@ -256,6 +256,7 @@ jobs:
           CONNECTION: Server=tcp:${{ inputs.sql-server }}.database.windows.net,1433;Initial Catalog=${{ inputs.sql-database }};Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;Authentication=Active Directory Default;
         run: |
           export "$CONNECTION_VARIABLE=$CONNECTION"
+          dotnet restore "$MIGRATIONS_PROJECT"
           dotnet tool restore
           dotnet ef database update --project "$MIGRATIONS_PROJECT" --startup-project "$MIGRATIONS_PROJECT" --configuration Release
 
