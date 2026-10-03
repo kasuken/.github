@@ -20,6 +20,8 @@ Subject to the terms and conditions of this Agreement, You hereby grant to the M
 
 Without limiting the foregoing, You agree that the Maintainer may license Your Contributions, as part of a Project or otherwise, under the GNU Affero General Public License v3.0 and/or under any other license terms, including proprietary or commercial license terms, at the Maintainer's sole discretion.
 
+To the extent permitted by applicable law, You waive, and agree not to assert, any moral rights You may have in Your Contributions against the Maintainer or recipients of software distributed by the Maintainer, to the extent such rights would prevent the uses permitted by this section. Where moral rights cannot be waived under applicable law, this paragraph does not apply.
+
 ## 3. Grant of Patent License
 
 Subject to the terms and conditions of this Agreement, You hereby grant to the Maintainer and to recipients of software distributed by the Maintainer a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable (except as stated in this section) patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the work, where such license applies only to those patent claims licensable by You that are necessarily infringed by Your Contribution(s) alone or by combination of Your Contribution(s) with the work to which such Contribution(s) was submitted. If any entity institutes patent litigation against You or any other entity (including a cross-claim or counterclaim in a lawsuit) alleging that Your Contribution, or the work to which You have contributed, constitutes direct or contributory patent infringement, then any patent licenses granted to that entity under this Agreement for that Contribution or work shall terminate as of the date such litigation is filed.
@@ -31,6 +33,8 @@ You represent that You are legally entitled to grant the above license. If Your 
 ## 5. Original Work
 
 You represent that each of Your Contributions is Your original creation (see section 7 for submissions on behalf of others). You represent that Your Contribution submissions include complete details of any third-party license or other restriction (including, but not limited to, related patents and trademarks) of which You are personally aware and which are associated with any part of Your Contributions.
+
+You may use AI-assisted tools to prepare Your Contributions. You remain responsible for them: You represent that You have the right to submit such content under this Agreement and that, to the best of Your knowledge, it does not reproduce third-party material under terms incompatible with this Agreement.
 
 ## 6. No Obligation to Support; Disclaimer
 
@@ -47,6 +51,10 @@ You agree to notify the Maintainer of any facts or circumstances of which You be
 ## 9. Assignment
 
 The Maintainer may assign or transfer this Agreement, and the rights granted under it, to any successor entity, including a company formed by the Maintainer to operate the Projects.
+
+## 10. Personal Data
+
+When You sign this Agreement, Your GitHub username, GitHub user ID, the date and time of signing, and the pull request in which You signed are recorded. This record is stored in a publicly visible branch of the Project repository and is kept for as long as the Maintainer distributes Your Contributions, because it is needed to demonstrate the rights granted under this Agreement.
 
 ---
 
