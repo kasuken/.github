@@ -16,6 +16,10 @@ GitHub uses these files automatically for any repository that doesn't have its o
 
 `LICENSE` is not inherited: each repository has its own (AGPL-3.0).
 
+## Production releases
+
+[`.github/workflows/release-azure-webapp.yml`](.github/workflows/release-azure-webapp.yml) is the reusable workflow every app calls to release to Azure App Service. [RELEASING.md](RELEASING.md) explains how to cut a release, roll back, and set up a new app.
+
 ## CLA workflow template
 
 [`workflow-templates/cla.yml`](workflow-templates/cla.yml) runs the CLA Assistant bot. Workflows are not inherited, so copy it into each repository as `.github/workflows/cla.yml`. Signatures are stored in each repository's `cla-signatures` branch.

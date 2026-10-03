@@ -1,0 +1,346 @@
+# Shared production release pipeline for the .NET SaaS apps (Brainy, LearnStack, MoneyBrain,
+# Needly). Each app calls it from its own .github/workflows/release.yml; see RELEASING.md.
+#
+#   publish a GitHub Release (vX.Y.Z)      -> deploy that tag
+#   run "Release" with bump=patch|minor|major -> next version from main, deploy, then tag + release
+#   run "Release" with redeploy=vX.Y.Z      -> rebuild and deploy an existing tag (rollback)
+#
+# Every path: wait for the app's CI to pass on the commit, build once, deploy through the
+# `production` environment with OIDC, then smoke test before anything is called released.
+name: Release to Azure App Service
+
+on:
+  workflow_call:
+    inputs:
+      app-name:
+        description: Azure Web App name.
+        type: string
+        required: true
+      web-project:
+        description: Path to the web project to publish.
+        type: string
+        required: true
+      base-url:
+        description: Public HTTPS URL of the app, without a trailing slash.
+        type: string
+        required: true
+      bump:
+        description: Version part to increment when creating a new release (patch, minor, major). Ignored for release events and redeploys.
+        type: string
+        default: patch
+      redeploy:
+        description: Existing tag to rebuild and deploy instead of creating a new release.
+        type: string
+        default: ''
+      dotnet-version:
+        description: .NET SDK to install when the repository has no global.json.
+        type: string
+        default: '10.0.x'
+      ci-workflow:
+        description: Workflow file that must have passed on the commit being released.
+        type: string
+        default: ci.yml
+      health-path:
+        description: Readiness endpoint that must return 200 after the deploy.
+        type: string
+        default: /health/ready
+      smoke-paths:
+        description: Extra space-separated paths that must return 200 after the deploy.
+        type: string
+        default: ''
+      migrations-project:
+        description: EF Core project to run `dotnet ef database update` with before the deploy. Leave empty when the app migrates on startup.
+        type: string
+        default: ''
+      resource-group:
+        description: Resource group of the SQL server (only with migrations-project).
+        type: string
+        default: ''
+      sql-server:
+        description: Azure SQL logical server name (only with migrations-project).
+        type: string
+        default: ''
+      sql-database:
+        description: Azure SQL database name (only with migrations-project).
+        type: string
+        default: ''
+      migrations-connection-variable:
+        description: Environment variable the design-time DbContext factory reads the connection string from (only with migrations-project).
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+      create-release: ${{ steps.version.outputs.create-release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          BUMP: ${{ inputs.bump }}
+          REDEPLOY: ${{ inputs.redeploy }}
+        run: |
+          semver='^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+          if [[ "$EVENT" == "release" ]]; then
+            tag="$RELEASE_TAG"; create=false
+          elif [[ -n "$REDEPLOY" ]]; then
+            tag="$REDEPLOY"; create=false
+          else
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "::error::New releases are cut from main only (got $GITHUB_REF)."; exit 1; }
+            latest=$(git tag --list 'v*' | grep -E "$semver" | sort -V | tail -n 1)
+            [[ "$latest" =~ $semver ]] || BASH_REMATCH=(v0.0.0 0 0 0)
+            major=${BASH_REMATCH[1]}; minor=${BASH_REMATCH[2]}; patch=${BASH_REMATCH[3]}
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "::error::Unknown bump '$BUMP'."; exit 1 ;;
+            esac
+            tag="v$major.$minor.$patch"; create=true
+            echo "Latest tag: ${latest:-none} -> $tag"
+          fi
+
+          [[ "$tag" =~ $semver ]] || { echo "::error::'$tag' is not a vMAJOR.MINOR.PATCH tag."; exit 1; }
+          if [[ "$create" == true ]]; then
+            ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || { echo "::error::Tag $tag already exists."; exit 1; }
+            sha=$(git rev-parse HEAD)
+          else
+            sha=$(git rev-parse -q --verify "refs/tags/$tag^{commit}") || { echo "::error::Tag $tag not found."; exit 1; }
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=${tag#v}"
+            echo "sha=$sha"
+            echo "create-release=$create"
+          } >> "$GITHUB_OUTPUT"
+          echo "### Releasing $tag ($sha)" >> "$GITHUB_STEP_SUMMARY"
+
+      # Skipped for redeploys: that tag already passed this gate when it was first released,
+      # and its CI run may have expired.
+      - name: Wait for CI to pass on ${{ steps.version.outputs.sha }}
+        if: inputs.redeploy == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.version.outputs.sha }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+        run: |
+          for attempt in $(seq 1 120); do
+            runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$CI_WORKFLOW" --commit "$SHA" \
+              --json status,conclusion,url --jq '[.[] | select(.status != "cancelled")]')
+            if jq -e 'any(.[]; .conclusion == "success")' <<<"$runs" >/dev/null; then
+              echo "CI passed: $(jq -r 'map(select(.conclusion == "success"))[0].url' <<<"$runs")"; exit 0
+            fi
+            if jq -e 'length > 0 and all(.[]; .status == "completed")' <<<"$runs" >/dev/null; then
+              echo "::error::CI ($CI_WORKFLOW) failed on $SHA: $(jq -r '.[0].url' <<<"$runs")"; exit 1
+            fi
+            echo "Waiting for $CI_WORKFLOW on $SHA (attempt $attempt)..."
+            sleep 20
+          done
+          echo "::error::No passing $CI_WORKFLOW run for $SHA after 40 minutes. Push the commit to main or re-run CI."
+          exit 1
+
+  build:
+    name: Build
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout ${{ needs.prepare.outputs.tag }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: ${{ hashFiles('global.json') != '' && 'global.json' || '' }}
+          dotnet-version: ${{ hashFiles('global.json') == '' && inputs.dotnet-version || '' }}
+
+      - name: Publish
+        env:
+          WEB_PROJECT: ${{ inputs.web-project }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: >
+          dotnet publish "$WEB_PROJECT" --configuration Release --output ./publish
+          -p:Version="$VERSION" -p:SourceRevisionId="$SHA" -p:ContinuousIntegrationBuild=true
+
+      - name: Upload package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webapp-${{ needs.prepare.outputs.version }}
+          path: ./publish
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy:
+    name: Deploy to production
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: production
+      url: ${{ inputs.base-url }}
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: webapp-${{ needs.prepare.outputs.version }}
+          path: ./publish
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Only for apps that do not migrate on startup (Needly). Runs before the new code ships,
+      # so a failed migration leaves the running version untouched.
+      - name: Checkout ${{ needs.prepare.outputs.tag }} for migrations
+        if: inputs.migrations-project != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          path: src
+
+      - name: Setup .NET for migrations
+        if: inputs.migrations-project != ''
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: ${{ hashFiles('src/global.json') != '' && 'src/global.json' || '' }}
+          dotnet-version: ${{ hashFiles('src/global.json') == '' && inputs.dotnet-version || '' }}
+
+      - name: Open SQL firewall for this runner
+        id: firewall
+        if: inputs.migrations-project != ''
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource-group }}
+          SQL_SERVER: ${{ inputs.sql-server }}
+        run: |
+          runner_ip=$(curl -fsS https://api.ipify.org)
+          rule="gh-runner-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "rule=$rule" >> "$GITHUB_OUTPUT"
+          az sql server firewall-rule create --resource-group "$RESOURCE_GROUP" --server "$SQL_SERVER" \
+            --name "$rule" --start-ip-address "$runner_ip" --end-ip-address "$runner_ip" --output none
+
+      - name: Apply database migrations
+        if: inputs.migrations-project != ''
+        working-directory: src
+        env:
+          MIGRATIONS_PROJECT: ${{ inputs.migrations-project }}
+          CONNECTION_VARIABLE: ${{ inputs.migrations-connection-variable }}
+          CONNECTION: Server=tcp:${{ inputs.sql-server }}.database.windows.net,1433;Initial Catalog=${{ inputs.sql-database }};Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;Authentication=Active Directory Default;
+        run: |
+          export "$CONNECTION_VARIABLE=$CONNECTION"
+          dotnet tool restore
+          dotnet ef database update --project "$MIGRATIONS_PROJECT" --startup-project "$MIGRATIONS_PROJECT" --configuration Release
+
+      - name: Close SQL firewall for this runner
+        if: always() && steps.firewall.outputs.rule != ''
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource-group }}
+          SQL_SERVER: ${{ inputs.sql-server }}
+          RULE: ${{ steps.firewall.outputs.rule }}
+        run: az sql server firewall-rule delete --resource-group "$RESOURCE_GROUP" --server "$SQL_SERVER" --name "$RULE" --output none
+
+      - name: Deploy to App Service
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
+        with:
+          app-name: ${{ inputs.app-name }}
+          package: ./publish
+
+      - name: Smoke test
+        env:
+          BASE_URL: ${{ inputs.base-url }}
+          HEALTH_PATH: ${{ inputs.health-path }}
+          SMOKE_PATHS: ${{ inputs.smoke-paths }}
+        run: |
+          for attempt in $(seq 1 20); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL$HEALTH_PATH" || true)
+            [[ "$status" == 200 ]] && break
+            [[ $attempt == 20 ]] && { echo "::error::$BASE_URL$HEALTH_PATH returned $status after 5 minutes."; exit 1; }
+            echo "Attempt $attempt: $HEALTH_PATH returned $status, retrying in 15s"
+            sleep 15
+          done
+          echo "$HEALTH_PATH healthy"
+
+          for path in $SMOKE_PATHS; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL$path")
+            [[ "$status" == 200 ]] || { echo "::error::$BASE_URL$path returned $status."; exit 1; }
+            echo "$path OK"
+          done
+
+          redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://${BASE_URL#https://}/")
+          case "$redirect" in
+            "301 https://"*|"307 https://"*|"308 https://"*) echo "HTTP redirects to HTTPS" ;;
+            *) echo "::error::HTTP did not redirect to HTTPS: $redirect"; exit 1 ;;
+          esac
+
+      - name: Summary
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          BASE_URL: ${{ inputs.base-url }}
+        run: echo "Deployed **$TAG** to $BASE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Create GitHub release
+    needs: [prepare, deploy]
+    if: needs.prepare.outputs.create-release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      # Uses the CHANGELOG.md section for this version when there is one (move the
+      # [Unreleased] entries under "## [X.Y.Z] - date" in the PR before releasing),
+      # and GitHub's generated notes otherwise. Releases created with GITHUB_TOKEN do not
+      # trigger the release event, so this never deploys twice.
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          notes=""
+          if [[ -f CHANGELOG.md ]]; then
+            notes=$(awk -v v="$VERSION" '
+              $0 ~ "^## \\[" v "\\]" { found = 1; next }
+              found && /^## \[/ { exit }
+              found && /^---$/ { next }
+              found { print }' CHANGELOG.md)
+          fi
+          if [[ -n "${notes//[[:space:]]/}" ]]; then
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --notes "$notes"
+          else
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --generate-notes
+          fi
