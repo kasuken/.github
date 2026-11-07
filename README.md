@@ -13,6 +13,7 @@ GitHub uses these files automatically for any repository that doesn't have its o
 | [SUPPORT.md](SUPPORT.md) | Where to get help |
 | [.github/ISSUE_TEMPLATE](.github/ISSUE_TEMPLATE) | Bug report and feature request forms |
 | [.github/pull_request_template.md](.github/pull_request_template.md) | Pull request checklist |
+| [docs/aspnetcore-hardening.md](docs/aspnetcore-hardening.md) | Shared ASP.NET Core security baseline: headers, HSTS, rate limiting, lockout, forwarded headers, BackgroundService errors |
 
 `LICENSE` is not inherited: each repository has its own (AGPL-3.0).
 
