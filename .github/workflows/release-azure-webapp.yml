@@ -171,7 +171,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.sha }}
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: ${{ hashFiles('global.json') != '' && 'global.json' || '' }}
           dotnet-version: ${{ hashFiles('global.json') == '' && inputs.dotnet-version || '' }}
@@ -229,7 +229,7 @@ jobs:
 
       - name: Setup .NET for migrations
         if: inputs.migrations-project != ''
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: ${{ hashFiles('src/global.json') != '' && 'src/global.json' || '' }}
           dotnet-version: ${{ hashFiles('src/global.json') == '' && inputs.dotnet-version || '' }}
